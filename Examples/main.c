@@ -3,6 +3,7 @@
 
 static Example* Examples[] =
 {
+	&BasicVr_Example,
 	&ClearScreen_Example,
 #if !(defined(SDL_PLATFORM_XBOXONE) || defined(SDL_PLATFORM_XBOXSERIES))
 	&ClearScreenMultiWindow_Example,

@@ -118,6 +118,7 @@ extern Example BlitCube_Example;
 extern Example BlitMirror_Example;
 extern Example GenerateMipmaps_Example;
 extern Example ASTC_Example;
+extern Example BasicVr_Example;
 extern Example Latency_Example;
 
 #endif
