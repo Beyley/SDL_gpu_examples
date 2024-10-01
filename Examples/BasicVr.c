@@ -8,6 +8,7 @@ static XrSession session;
 static bool doXrFrameLoop = false;
 static XrViewConfigurationView *view_configuration_views = NULL;
 static Uint32 num_view_configurations;
+static SDL_GPUTexture **swapchain_textures;
 
 static int Init(Context* context)
 {
@@ -117,7 +118,13 @@ static int Update(Context* context)
 
 						SDL_GPUTextureFormat swapchainFormat;
 						XrSwapchain swapchain;
-						result = SDL_CreateGPUXRSwapchain(context->Device, session, &swapchainCreateInfo, &swapchainFormat, &swapchain);
+						result = SDL_CreateGPUXRSwapchain(
+							context->Device, 
+							session, 
+							&swapchainCreateInfo, 
+							&swapchainFormat, 
+							&swapchain, 
+							&swapchain_textures);
 						if(result != XR_SUCCESS)
 						{
 							SDL_Log("Failed to create XR swapchain: %d", result);
