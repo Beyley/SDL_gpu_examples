@@ -6,6 +6,8 @@ static XrInstance instance;
 static XrSystemId systemId;
 static XrSession session;
 static bool doXrFrameLoop = false;
+static XrViewConfigurationView *view_configuration_views = NULL;
+static Uint32 num_view_configurations;
 
 static int Init(Context* context)
 {
@@ -22,8 +24,8 @@ static int Init(Context* context)
 	}
 
 	XrSessionCreateInfo sessionCreateInfo = {XR_TYPE_SESSION_CREATE_INFO};
-	session = SDL_CreateGPUXRSession(context->Device, &sessionCreateInfo, &result);
-	if(!session)
+	result = SDL_CreateGPUXRSession(context->Device, &sessionCreateInfo, &session);
+	if(result != XR_SUCCESS)
 	{
 		SDL_Log("SDL_CreateGPUXRSession failed: %d", result);
 		return -1;
@@ -55,14 +57,75 @@ static int Update(Context* context)
 						result = xrBeginSession(session, &sessionBeginInfo);
 						if(result != XR_SUCCESS)
 						{
-							SDL_Log("Failed to create session, reason %d", result);
+							SDL_Log("Failed to create session: %d", result);
+							return -1;
+						}
+
+						SDL_Log("Begun OpenXR session");
+						
+						result = xrEnumerateViewConfigurationViews(
+							instance, 
+							systemId, 
+							XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 
+							0, 
+							&num_view_configurations, 
+							NULL);
+						if(result != XR_SUCCESS)
+						{
+							SDL_Log("Failed to get view configuration array size: %d", result);
+							return -1;
+						}
+
+						view_configuration_views = SDL_calloc(num_view_configurations, sizeof(XrViewConfigurationView));
+						for (Uint32 i = 0; i < num_view_configurations; i++)
+							view_configuration_views[i].type = XR_TYPE_VIEW_CONFIGURATION_VIEW;
+						
+						result = xrEnumerateViewConfigurationViews(
+							instance, 
+							systemId, 
+							XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 
+							num_view_configurations, 
+							&num_view_configurations, 
+							view_configuration_views);
+						if(result != XR_SUCCESS)
+						{
+							SDL_Log("Failed to get view configuration data: %d", result);
+							return -1;
+						}
+
+						for(Uint32 i = 0; i < num_view_configurations; i++)
+						{
+							SDL_Log(
+								"%d max width: %d, max height: %d, max sample count: %d, rec width: %d, rec height: %d, rec sample count: %d",
+								i, 
+								view_configuration_views->maxImageRectWidth, 
+								view_configuration_views->maxImageRectHeight, 
+								view_configuration_views->maxSwapchainSampleCount, 
+								view_configuration_views->recommendedImageRectWidth, 
+								view_configuration_views->recommendedImageRectHeight, 
+								view_configuration_views->recommendedSwapchainSampleCount);
+						}
+
+						XrSwapchainCreateInfo swapchainCreateInfo = {XR_TYPE_SWAPCHAIN_CREATE_INFO};
+						swapchainCreateInfo.width = 1280;
+						swapchainCreateInfo.height = 1440;
+						swapchainCreateInfo.mipCount = 1;
+						swapchainCreateInfo.sampleCount = 1;
+						swapchainCreateInfo.faceCount = 1;
+						swapchainCreateInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT; /* sure..? not sure if anything else is needed. */
+						swapchainCreateInfo.arraySize = 1;
+
+						SDL_GPUTextureFormat swapchainFormat;
+						XrSwapchain swapchain;
+						result = SDL_CreateGPUXRSwapchain(context->Device, session, &swapchainCreateInfo, &swapchainFormat, &swapchain);
+						if(result != XR_SUCCESS)
+						{
+							SDL_Log("Failed to create XR swapchain: %d", result);
 							return -1;
 						}
 
 						doXrFrameLoop = true;
 
-						SDL_Log("Begun OpenXR session");
-						
 						break;
 					}
 					case XR_SESSION_STATE_STOPPING:
@@ -162,6 +225,8 @@ static int Draw(Context* context)
 
 static void Quit(Context* context)
 {
+	if(view_configuration_views != NULL) SDL_free(view_configuration_views);
+
 	CommonQuit(context);
 }
 
