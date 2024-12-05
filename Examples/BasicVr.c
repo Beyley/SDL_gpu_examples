@@ -8,7 +8,9 @@ static XrSession session;
 static bool doXrFrameLoop = false;
 static XrViewConfigurationView *view_configuration_views = NULL;
 static Uint32 num_view_configurations;
+static XrSwapchain swapchain;
 static SDL_GPUTexture **swapchain_textures;
+static XrSpace localSpace;
 
 static int Init(Context* context)
 {
@@ -37,15 +39,14 @@ static int Init(Context* context)
 
 static int Update(Context* context)
 {
+	static int frameCount = 0;
 	XrResult result;
+
+	SDL_Log("frame count: %d", frameCount++);
 	
-	while(true) {
-		XrEventDataBuffer event = {XR_TYPE_EVENT_DATA_BUFFER};
-		result = xrPollEvent(instance, &event);
-
-		if(result != XR_SUCCESS) 
-			break;
-
+	XrEventDataBuffer event = {XR_TYPE_EVENT_DATA_BUFFER};
+	result = xrPollEvent(instance, &event);
+	if(result == XR_SUCCESS) {
 		switch(event.type)
 		{
 			case XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED: 
@@ -111,7 +112,7 @@ static int Update(Context* context)
 						}
 
 						XrSwapchainCreateInfo swapchainCreateInfo = {XR_TYPE_SWAPCHAIN_CREATE_INFO};
-						swapchainCreateInfo.width = 1280;
+						swapchainCreateInfo.width = 1280; /* TODO: dont hard-code width/height! */
 						swapchainCreateInfo.height = 1440;
 						swapchainCreateInfo.mipCount = 1;
 						swapchainCreateInfo.sampleCount = 1;
@@ -120,7 +121,6 @@ static int Update(Context* context)
 						swapchainCreateInfo.arraySize = 1;
 
 						SDL_GPUTextureFormat swapchainFormat;
-						XrSwapchain swapchain;
 						result = SDL_CreateGPUXRSwapchain(
 							context->Device, 
 							session, 
@@ -135,6 +135,17 @@ static int Update(Context* context)
 						}
 
 						doXrFrameLoop = true;
+
+						result = xrCreateReferenceSpace(session, &(XrReferenceSpaceCreateInfo){
+							.type = XR_TYPE_REFERENCE_SPACE_CREATE_INFO,
+							.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL,
+							.poseInReferenceSpace = {{0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f}},
+						}, &localSpace);
+						if(result != XR_SUCCESS)
+						{
+							SDL_Log("Failed to create local space: %d", result);
+							return -1;
+						}
 
 						break;
 					}
@@ -207,6 +218,7 @@ static int Draw(Context* context)
 			return -1;
 		}
 
+		XrCompositionLayerProjectionView projectionViews[2];
 		if(frameState.shouldRender)
 		{
 			SDL_GPUCommandBuffer* cmdbuf = SDL_AcquireGPUCommandBuffer(context->Device);
@@ -216,12 +228,89 @@ static int Draw(Context* context)
 				return -1;
 			}
 
+			XrView views[2];
+			views[0].type = XR_TYPE_VIEW;
+			views[1].type = XR_TYPE_VIEW;
+
+			Uint32 viewCount;
+			XrViewState viewState = {XR_TYPE_VIEW_STATE};
+			result = xrLocateViews(session, &(XrViewLocateInfo){
+				.type = XR_TYPE_VIEW_LOCATE_INFO,
+				.displayTime = frameState.predictedDisplayTime,
+				.space = localSpace,
+				.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
+			}, &viewState, 2, &viewCount, views);
+			if(result != XR_SUCCESS) 
+			{
+				SDL_Log("Failed to locate views, %d", result);
+				return -1;
+			}
+
+			Uint32 swapchainIndex;
+			result = xrAcquireSwapchainImage(swapchain, NULL, &swapchainIndex);
+			if(result != XR_SUCCESS) 
+			{
+				SDL_Log("Failed to acquire swapchain image, %d", result);
+				return -1;
+			}
+
+			XrSwapchainImageWaitInfo waitInfo = {XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+			waitInfo.timeout = XR_INFINITE_DURATION; /* spec says the runtime *must* never block indefinitely, so this is always safe! but maybe we *should* tune this? not sure */
+			result = xrWaitSwapchainImage(swapchain, &waitInfo);
+			if(result != XR_SUCCESS) 
+			{
+				SDL_Log("Failed to wait swapchain image, %d", result);
+				return -1;
+			}
+
+			/* we got the texture we're going to render with! */
+			SDL_GPUTexture *swapchain_texture = swapchain_textures[swapchainIndex];
+
+			SDL_GPURenderPass *render_pass = SDL_BeginGPURenderPass(cmdbuf, &(SDL_GPUColorTargetInfo){
+				.texture = swapchain_texture,
+				.clear_color = {0.5, 0.5, 0.5, 1},
+				.load_op = SDL_GPU_LOADOP_CLEAR,
+				.store_op = SDL_GPU_STOREOP_STORE,
+			}, 1, NULL);
+
+			SDL_EndGPURenderPass(render_pass);
+
 			SDL_SubmitGPUCommandBuffer(cmdbuf);
+
+			result = xrReleaseSwapchainImage(swapchain, NULL);
+			if(result != XR_SUCCESS) 
+			{
+				SDL_Log("Failed to release swapchain image, %d", result);
+				return -1;
+			}
+
+			for(Uint32 i = 0; i < 2; i++) {
+				projectionViews[i].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW,
+				projectionViews[i].fov = views[i].fov;
+				projectionViews[i].pose = views[i].pose;
+				projectionViews[i].subImage = (XrSwapchainSubImage){
+					.swapchain = swapchain,
+					.imageArrayIndex = 0,
+					.imageRect = {.offset = {0}, .extent = {1280, 1440}},
+				};
+			}
 		}
 
 		XrFrameEndInfo frameEndInfo = {XR_TYPE_FRAME_END_INFO};
 		frameEndInfo.displayTime = frameState.predictedDisplayTime;
 		frameEndInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+
+		frameEndInfo.layerCount = frameState.shouldRender ? 1 : 0;
+
+		const XrCompositionLayerBaseHeader *projectionLayers[1];
+		projectionLayers[0] = (const XrCompositionLayerBaseHeader*) &(XrCompositionLayerProjection){
+			.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION,
+			.space = localSpace,
+			.viewCount = 2,
+			.views = projectionViews,
+		};
+		frameEndInfo.layers = projectionLayers;
+
 		result = xrEndFrame(session, &frameEndInfo);
 		if(result != XR_SUCCESS)
 		{
