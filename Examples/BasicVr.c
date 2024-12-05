@@ -38,11 +38,14 @@ static int Init(Context* context)
 static int Update(Context* context)
 {
 	XrResult result;
-	XrEventDataBuffer event = {XR_TYPE_EVENT_DATA_BUFFER};
 	
-	result = xrPollEvent(instance, &event);
-	if(result == XR_SUCCESS)
-	{
+	while(true) {
+		XrEventDataBuffer event = {XR_TYPE_EVENT_DATA_BUFFER};
+		result = xrPollEvent(instance, &event);
+
+		if(result != XR_SUCCESS) 
+			break;
+
 		switch(event.type)
 		{
 			case XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED: 
