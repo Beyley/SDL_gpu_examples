@@ -15,8 +15,8 @@ static int Init(Context* context)
 	XrResult result;
 
 	SDL_PropertiesID props = SDL_CreateProperties();
-	SDL_SetBooleanProperty(props, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_SPIRV_BOOL, true);
-	SDL_SetBooleanProperty(props, SDL_PROP_GPU_DEVICE_CREATE_DEBUGMODE_BOOL, true);
+	SDL_SetBooleanProperty(props, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_SPIRV_BOOLEAN, true);
+	SDL_SetBooleanProperty(props, SDL_PROP_GPU_DEVICE_CREATE_DEBUGMODE_BOOLEAN, true);
 
 	if (!SDL_CreateXRGPUDeviceWithProperties(&context->Device, &instance, &systemId, props))
 	{
