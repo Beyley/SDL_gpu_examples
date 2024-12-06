@@ -196,10 +196,8 @@ static int HandleXrEvent(Context* context)
 
 static int Update(Context* context)
 {
-	static int frameCount = 0;
 	XrResult result;
 
-	SDL_Log("frame count: %d", frameCount++);
 	if(HandleXrEvent(context) != 0) return -1;
 
 	return 0;
@@ -254,7 +252,6 @@ static int Draw(Context* context)
 
 		// If we need to render, fill out the projection views for each eye
 		XrCompositionLayerProjectionView projectionViews[viewCount];
-		SDL_zeroa(projectionViews);
 
 		if(frameState.shouldRender)
 		{
@@ -292,13 +289,14 @@ static int Draw(Context* context)
 
 				XR_ERR_RET(xrReleaseSwapchainImage(swapchains[i].swapchain, NULL), -1);
 
-				projectionViews[i].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW,
-				projectionViews[i].fov = views[i].fov;
-				projectionViews[i].pose = views[i].pose;
-				projectionViews[i].subImage = (XrSwapchainSubImage){
-					.swapchain = swapchain.swapchain,
-					.imageArrayIndex = 0,
-					.imageRect = {.offset = {0}, .extent = swapchain.size},
+				projectionViews[i] = (XrCompositionLayerProjectionView){XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW,
+					.fov = views[i].fov,
+					.pose = views[i].pose,
+					.subImage = {
+						.swapchain = swapchain.swapchain,
+						.imageArrayIndex = 0,
+						.imageRect = {.offset = {0}, .extent = swapchain.size},
+					}
 				};
 			}
 		} 
@@ -326,7 +324,7 @@ static int Draw(Context* context)
 
 		XR_ERR_RET(xrEndFrame(session, &frameEndInfo), -1);
 	} 
-	// If we aren't in the OpenXR frame loop, let's still render to the desktop view
+	// If we aren't in the OpenXR frame loop, let's still render to the desktop view in our own frame loop
 	else {
 		if(RenderDesktopView(context, cmdbuf) != 0) return -1;
 
