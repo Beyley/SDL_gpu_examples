@@ -6,11 +6,11 @@ static XrInstance instance = NULL;
 static XrSystemId systemId = 0;
 static XrSession session = NULL;
 static bool doXrFrameLoop = false;
-static XrViewConfigurationView *view_configuration_views = NULL;
 static Uint32 num_view_configurations = 0;
 static XrSwapchain swapchain = NULL;
 static SDL_GPUTexture **swapchain_textures = NULL;
 static XrSpace localSpace = NULL;
+static XrExtent2Di swapchainSize = {0, 0};
 
 static int Init(Context* context)
 {
@@ -68,9 +68,9 @@ static int HandleStateChangedEvent(Context* context, XrEventDataSessionStateChan
 				return -1;
 			}
 
-			view_configuration_views = SDL_calloc(num_view_configurations, sizeof(XrViewConfigurationView));
+			XrViewConfigurationView *view_configuration_views = SDL_stack_alloc(XrViewConfigurationView, num_view_configurations);
 			for (Uint32 i = 0; i < num_view_configurations; i++)
-				view_configuration_views[i].type = XR_TYPE_VIEW_CONFIGURATION_VIEW;
+				view_configuration_views[i] = (XrViewConfigurationView){XR_TYPE_VIEW_CONFIGURATION_VIEW};
 			
 			result = xrEnumerateViewConfigurationViews(
 				instance, 
@@ -96,16 +96,21 @@ static int HandleStateChangedEvent(Context* context, XrEventDataSessionStateChan
 					view_configuration_views->recommendedImageRectWidth, 
 					view_configuration_views->recommendedImageRectHeight, 
 					view_configuration_views->recommendedSwapchainSampleCount);
+
+				swapchainSize = (XrExtent2Di){view_configuration_views->recommendedImageRectWidth, view_configuration_views->recommendedImageRectHeight};
 			}
 
-			XrSwapchainCreateInfo swapchainCreateInfo = {XR_TYPE_SWAPCHAIN_CREATE_INFO};
-			swapchainCreateInfo.width = 1280; /* TODO: dont hard-code width/height! */
-			swapchainCreateInfo.height = 1440;
-			swapchainCreateInfo.mipCount = 1;
-			swapchainCreateInfo.sampleCount = 1;
-			swapchainCreateInfo.faceCount = 1;
-			swapchainCreateInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT; /* sure..? not sure if anything else is needed. */
-			swapchainCreateInfo.arraySize = 1;
+			SDL_stack_free(view_configuration_views);
+
+			XrSwapchainCreateInfo swapchainCreateInfo = {
+				.type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
+				.width = swapchainSize.width,
+				.height = swapchainSize.height,
+				.mipCount = 1,
+				.sampleCount = 1,
+				.faceCount = 1,
+				.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT, /* sure..? not sure if anything else is needed. */
+				.arraySize = 1};
 
 			SDL_GPUTextureFormat swapchainFormat;
 			result = SDL_CreateGPUXRSwapchain(
@@ -307,7 +312,7 @@ static int Draw(Context* context)
 				projectionViews[i].subImage = (XrSwapchainSubImage){
 					.swapchain = swapchain,
 					.imageArrayIndex = 0,
-					.imageRect = {.offset = {0}, .extent = {1280, 1440}},
+					.imageRect = {.offset = {0}, .extent = swapchainSize},
 				};
 			}
 		}
@@ -340,8 +345,6 @@ static int Draw(Context* context)
 
 static void Quit(Context* context)
 {
-	if (view_configuration_views) SDL_free(view_configuration_views);
-
 	if (localSpace) xrDestroySpace(localSpace);
 	if (swapchain) SDL_DestroyGPUXRSwapchain(context->Device, swapchain, swapchain_textures);
 	if (session) xrDestroySession(session);
