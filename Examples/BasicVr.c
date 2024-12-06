@@ -12,6 +12,18 @@ static SDL_GPUTexture **swapchain_textures = NULL;
 static XrSpace localSpace = NULL;
 static XrExtent2Di swapchainSize = {0, 0};
 
+#define XR_ERR_RET(resultExpression, retval)                                \
+    do {                                                                    \
+		XrResult resolvedResult = (resultExpression); 						\
+		if (XR_FAILED(resolvedResult)) {                   					\
+			char resultString[XR_MAX_RESULT_STRING_SIZE]; 					\
+			SDL_memset(resultString, 0, SDL_arraysize(resultString)); 		\
+			(void)xrResultToString(instance, resolvedResult, resultString); \
+			SDL_SetError("Got OpenXR error %s", resultString);				\
+			return (retval);                      							\
+		} 																	\
+	} while (0)
+
 static int Init(Context* context)
 {
 	XrResult result;
@@ -27,63 +39,42 @@ static int Init(Context* context)
 	}
 
 	XrSessionCreateInfo sessionCreateInfo = {XR_TYPE_SESSION_CREATE_INFO};
-	result = SDL_CreateGPUXRSession(context->Device, &sessionCreateInfo, &session);
-	if(result != XR_SUCCESS)
-	{
-		SDL_Log("SDL_CreateGPUXRSession failed: %d", result);
-		return -1;
-	}
+	XR_ERR_RET(SDL_CreateGPUXRSession(context->Device, &sessionCreateInfo, &session), -1);
 
 	return 0;
 }
 
 static int HandleStateChangedEvent(Context* context, XrEventDataSessionStateChanged* event)
 {
-	XrResult result;
 	switch(event->state)
 	{
 		case XR_SESSION_STATE_READY:
 		{
 			XrSessionBeginInfo sessionBeginInfo = {XR_TYPE_SESSION_BEGIN_INFO};
 			sessionBeginInfo.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
-			result = xrBeginSession(session, &sessionBeginInfo);
-			if(result != XR_SUCCESS)
-			{
-				SDL_Log("Failed to create session: %d", result);
-				return -1;
-			}
+			XR_ERR_RET(xrBeginSession(session, &sessionBeginInfo), -1);
 
 			SDL_Log("Begun OpenXR session");
 			
-			result = xrEnumerateViewConfigurationViews(
+			XR_ERR_RET(xrEnumerateViewConfigurationViews(
 				instance, 
 				systemId, 
 				XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 
 				0, 
 				&num_view_configurations, 
-				NULL);
-			if(result != XR_SUCCESS)
-			{
-				SDL_Log("Failed to get view configuration array size: %d", result);
-				return -1;
-			}
+				NULL), -1);
 
 			XrViewConfigurationView *view_configuration_views = SDL_stack_alloc(XrViewConfigurationView, num_view_configurations);
 			for (Uint32 i = 0; i < num_view_configurations; i++)
 				view_configuration_views[i] = (XrViewConfigurationView){XR_TYPE_VIEW_CONFIGURATION_VIEW};
 			
-			result = xrEnumerateViewConfigurationViews(
+			XR_ERR_RET(xrEnumerateViewConfigurationViews(
 				instance, 
 				systemId, 
 				XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 
 				num_view_configurations, 
 				&num_view_configurations, 
-				view_configuration_views);
-			if(result != XR_SUCCESS)
-			{
-				SDL_Log("Failed to get view configuration data: %d", result);
-				return -1;
-			}
+				view_configuration_views), -1);
 
 			for(Uint32 i = 0; i < num_view_configurations; i++)
 			{
@@ -113,31 +104,21 @@ static int HandleStateChangedEvent(Context* context, XrEventDataSessionStateChan
 				.arraySize = 1};
 
 			SDL_GPUTextureFormat swapchainFormat;
-			result = SDL_CreateGPUXRSwapchain(
+			XR_ERR_RET(SDL_CreateGPUXRSwapchain(
 				context->Device, 
 				session, 
 				&swapchainCreateInfo, 
 				&swapchainFormat, 
 				&swapchain, 
-				&swapchain_textures);
-			if(result != XR_SUCCESS)
-			{
-				SDL_Log("Failed to create XR swapchain: %d", result);
-				return -1;
-			}
+				&swapchain_textures), -1);
 
 			doXrFrameLoop = true;
 
-			result = xrCreateReferenceSpace(session, &(XrReferenceSpaceCreateInfo){
+			XR_ERR_RET(xrCreateReferenceSpace(session, &(XrReferenceSpaceCreateInfo){
 				.type = XR_TYPE_REFERENCE_SPACE_CREATE_INFO,
 				.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL,
 				.poseInReferenceSpace = {{0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f}},
-			}, &localSpace);
-			if(result != XR_SUCCESS)
-			{
-				SDL_Log("Failed to create local space: %d", result);
-				return -1;
-			}
+			}, &localSpace), -1);
 
 			break;
 		}
@@ -145,12 +126,7 @@ static int HandleStateChangedEvent(Context* context, XrEventDataSessionStateChan
 		{
 			doXrFrameLoop = false;
 
-			result = xrEndSession(session);
-			if(result != XR_SUCCESS)
-			{
-				SDL_Log("Failed to end session: %d", result);
-				return -1;
-			}
+			XR_ERR_RET(xrEndSession(session), -1);
 
 			SDL_Log("Ended OpenXR session");
 
@@ -172,9 +148,8 @@ static int HandleStateChangedEvent(Context* context, XrEventDataSessionStateChan
 static int HandleXrEvent(Context* context) 
 {
 	XrResult result;
-
 	XrEventDataBuffer event = {XR_TYPE_EVENT_DATA_BUFFER};
-	result = xrPollEvent(instance, &event);
+	XR_ERR_RET(result = xrPollEvent(instance, &event), -1);
 	if(result == XR_SUCCESS) {
 		switch(event.type)
 		{
@@ -217,31 +192,24 @@ static int Update(Context* context)
 
 static int Draw(Context* context)
 {
-	XrResult result;
+	// XrResult result;
 
 	if(doXrFrameLoop) 
 	{
 		XrFrameWaitInfo frameWaitInfo = {XR_TYPE_FRAME_WAIT_INFO};
-
 		XrFrameState frameState = {XR_TYPE_FRAME_STATE};
-		result = xrWaitFrame(session, &frameWaitInfo, &frameState);
-		if(result != XR_SUCCESS)
-		{
-			SDL_Log("Failed to wait on a frame: %d", result);
-			return -1;
-		}
+		// Wait for the next frame
+		XR_ERR_RET(xrWaitFrame(session, &frameWaitInfo, &frameState), -1);
 
+		// Begin a new frame
 		XrFrameBeginInfo frameBeginInfo = {XR_TYPE_FRAME_BEGIN_INFO};
-		result = xrBeginFrame(session, &frameBeginInfo);
-		if(result != XR_SUCCESS)
-		{
-			SDL_Log("Failed to begin frame: %d", result);
-			return -1;
-		}
+		XR_ERR_RET(xrBeginFrame(session, &frameBeginInfo), -1);
 
+		// If we need to render, fill out the projection views for each eye
 		XrCompositionLayerProjectionView projectionViews[2];
 		if(frameState.shouldRender)
 		{
+			// Get a GPU cmd buffer
 			SDL_GPUCommandBuffer* cmdbuf = SDL_AcquireGPUCommandBuffer(context->Device);
 			if (cmdbuf == NULL)
 			{
@@ -249,40 +217,23 @@ static int Draw(Context* context)
 				return -1;
 			}
 
-			XrView views[2];
-			views[0].type = XR_TYPE_VIEW;
-			views[1].type = XR_TYPE_VIEW;
-
 			Uint32 viewCount;
+			XrView views[2] = {{XR_TYPE_VIEW}, {XR_TYPE_VIEW}};
 			XrViewState viewState = {XR_TYPE_VIEW_STATE};
-			result = xrLocateViews(session, &(XrViewLocateInfo){
+			// TODO: handle viewCount not being 2
+			XR_ERR_RET(xrLocateViews(session, &(XrViewLocateInfo){
 				.type = XR_TYPE_VIEW_LOCATE_INFO,
 				.displayTime = frameState.predictedDisplayTime,
 				.space = localSpace,
 				.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
-			}, &viewState, 2, &viewCount, views);
-			if(result != XR_SUCCESS) 
-			{
-				SDL_Log("Failed to locate views, %d", result);
-				return -1;
-			}
+			}, &viewState, 2, &viewCount, views), -1);
 
 			Uint32 swapchainIndex;
-			result = xrAcquireSwapchainImage(swapchain, NULL, &swapchainIndex);
-			if(result != XR_SUCCESS) 
-			{
-				SDL_Log("Failed to acquire swapchain image, %d", result);
-				return -1;
-			}
+			XR_ERR_RET(xrAcquireSwapchainImage(swapchain, NULL, &swapchainIndex), -1);
 
 			XrSwapchainImageWaitInfo waitInfo = {XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
 			waitInfo.timeout = XR_INFINITE_DURATION; /* spec says the runtime *must* never block indefinitely, so this is always safe! but maybe we *should* tune this? not sure */
-			result = xrWaitSwapchainImage(swapchain, &waitInfo);
-			if(result != XR_SUCCESS) 
-			{
-				SDL_Log("Failed to wait swapchain image, %d", result);
-				return -1;
-			}
+			XR_ERR_RET(xrWaitSwapchainImage(swapchain, &waitInfo), -1);
 
 			/* we got the texture we're going to render with! */
 			SDL_GPUTexture *swapchain_texture = swapchain_textures[swapchainIndex];
@@ -298,12 +249,7 @@ static int Draw(Context* context)
 
 			SDL_SubmitGPUCommandBuffer(cmdbuf);
 
-			result = xrReleaseSwapchainImage(swapchain, NULL);
-			if(result != XR_SUCCESS) 
-			{
-				SDL_Log("Failed to release swapchain image, %d", result);
-				return -1;
-			}
+			XR_ERR_RET(xrReleaseSwapchainImage(swapchain, NULL), -1);
 
 			for(Uint32 i = 0; i < 2; i++) {
 				projectionViews[i].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW,
@@ -332,12 +278,7 @@ static int Draw(Context* context)
 		};
 		frameEndInfo.layers = projectionLayers;
 
-		result = xrEndFrame(session, &frameEndInfo);
-		if(result != XR_SUCCESS)
-		{
-			SDL_Log("Failed to end frame: %d", result);
-			return -1;
-		}
+		XR_ERR_RET(xrEndFrame(session, &frameEndInfo), -1);
 	}
 
 	return 0;
