@@ -87,10 +87,9 @@ static int HandleStateChangedEvent(Context* context, XrEventDataSessionStateChan
 
 				for(Uint32 i = 0; i < viewCount; i++)
 				{
-					views[i] = (XrView){XR_TYPE_VIEW};
+					views[i] = (XrView){XR_TYPE_VIEW, .pose = {.orientation = IDENTITY_QUAT}}; // Init the orientation to an identity, so it's always a valid quaternion
 
 					Swapchain *swapchain = &swapchains[i];
-					SDL_zerop(swapchain);
 
 					XrViewConfigurationView view = view_configuration_views[i];
 
@@ -206,7 +205,7 @@ static int Update(Context* context)
 	return 0;
 }
 
-static int RenderView(SDL_GPUCommandBuffer *cmdbuf, SDL_GPUTexture *texture, XrView view)
+static int RenderView(Context *context, SDL_GPUCommandBuffer *cmdbuf, SDL_GPUTexture *texture, XrView view)
 {
 	SDL_GPURenderPass *render_pass = SDL_BeginGPURenderPass(cmdbuf, &(SDL_GPUColorTargetInfo){
 		.texture = texture,
@@ -220,10 +219,28 @@ static int RenderView(SDL_GPUCommandBuffer *cmdbuf, SDL_GPUTexture *texture, XrV
 	return 0;
 }
 
+static int RenderDesktopView(Context *context, SDL_GPUCommandBuffer *cmdbuf)
+{
+	SDL_GPUTexture *swapchainTexture;
+	SDL_AcquireGPUSwapchainTexture(cmdbuf, context->Window, &swapchainTexture, NULL, NULL);
+
+	XrView view = {XR_TYPE_VIEW, .pose = IDENTITY_POSE};
+	if(viewCount > 0) view = views[0];
+
+	// Render the desktop view with the first view
+	return RenderView(context, cmdbuf, swapchainTexture, view);
+}
+
 static int Draw(Context* context)
 {
-	// XrResult result;
+	SDL_GPUCommandBuffer* cmdbuf = SDL_AcquireGPUCommandBuffer(context->Device);
+	if (cmdbuf == NULL)
+	{
+		SDL_Log("AcquireGPUCommandBuffer failed: %s", SDL_GetError());
+		return -1;
+	}
 
+	Uint32 viewCountOutput = 0;
 	if(doXrFrameLoop) 
 	{
 		XrFrameWaitInfo frameWaitInfo = {XR_TYPE_FRAME_WAIT_INFO};
@@ -237,18 +254,10 @@ static int Draw(Context* context)
 
 		// If we need to render, fill out the projection views for each eye
 		XrCompositionLayerProjectionView projectionViews[viewCount];
+		SDL_zeroa(projectionViews);
 
-		Uint32 viewCountOutput;
 		if(frameState.shouldRender)
 		{
-			// Get a GPU cmd buffer to render all our frames
-			SDL_GPUCommandBuffer* cmdbuf = SDL_AcquireGPUCommandBuffer(context->Device);
-			if (cmdbuf == NULL)
-			{
-				SDL_Log("AcquireGPUCommandBuffer failed: %s", SDL_GetError());
-				return -1;
-			}
-
 			XrViewState viewState = {XR_TYPE_VIEW_STATE};
 			XR_ERR_RET(xrLocateViews(session, &(XrViewLocateInfo){
 				.type = XR_TYPE_VIEW_LOCATE_INFO,
@@ -270,8 +279,11 @@ static int Draw(Context* context)
 				/* we got the texture we're going to render with! */
 				SDL_GPUTexture *swapchain_texture = swapchain.images[swapchainIndex];
 
-				if(RenderView(cmdbuf, swapchain_texture, views[i]) != 0) return -1;
+				if(RenderView(context, cmdbuf, swapchain_texture, views[i]) != 0) return -1;
 			}
+
+			// Always render desktop view
+			RenderDesktopView(context, cmdbuf);
 
 			SDL_SubmitGPUCommandBuffer(cmdbuf);
 
@@ -289,6 +301,12 @@ static int Draw(Context* context)
 					.imageRect = {.offset = {0}, .extent = swapchain.size},
 				};
 			}
+		} 
+		// Even if we shouldn't be rendering to the VR views, lets still render the desktop view
+		else {
+			if(RenderDesktopView(context, cmdbuf) != 0) return -1;
+
+			SDL_SubmitGPUCommandBuffer(cmdbuf);
 		}
 
 		XrFrameEndInfo frameEndInfo = {XR_TYPE_FRAME_END_INFO};
@@ -307,6 +325,12 @@ static int Draw(Context* context)
 		frameEndInfo.layers = projectionLayers;
 
 		XR_ERR_RET(xrEndFrame(session, &frameEndInfo), -1);
+	} 
+	// If we aren't in the OpenXR frame loop, let's still render to the desktop view
+	else {
+		if(RenderDesktopView(context, cmdbuf) != 0) return -1;
+
+		SDL_SubmitGPUCommandBuffer(cmdbuf);
 	}
 
 	return 0;
