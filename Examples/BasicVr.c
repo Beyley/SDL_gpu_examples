@@ -1,28 +1,21 @@
 #include "Common.h"
 
-#include "openxr/openxr.h"
+typedef struct Swapchain {
+	XrSwapchain swapchain;
+	SDL_GPUTexture **images;
+	XrExtent2Di size;
+	SDL_GPUTextureFormat format;
+} Swapchain;
 
 static XrInstance instance = NULL;
 static XrSystemId systemId = 0;
 static XrSession session = NULL;
 static bool doXrFrameLoop = false;
-static Uint32 num_view_configurations = 0;
-static XrSwapchain swapchain = NULL;
-static SDL_GPUTexture **swapchain_textures = NULL;
 static XrSpace localSpace = NULL;
-static XrExtent2Di swapchainSize = {0, 0};
 
-#define XR_ERR_RET(resultExpression, retval)                                \
-    do {                                                                    \
-		XrResult resolvedResult = (resultExpression); 						\
-		if (XR_FAILED(resolvedResult)) {                   					\
-			char resultString[XR_MAX_RESULT_STRING_SIZE]; 					\
-			SDL_memset(resultString, 0, SDL_arraysize(resultString)); 		\
-			(void)xrResultToString(instance, resolvedResult, resultString); \
-			SDL_SetError("Got OpenXR error %s", resultString);				\
-			return (retval);                      							\
-		} 																	\
-	} while (0)
+static Swapchain *swapchains = NULL;
+static XrView *views = NULL;
+static Uint32 viewCount = 0;
 
 static int Init(Context* context)
 {
@@ -40,6 +33,19 @@ static int Init(Context* context)
 
 	XrSessionCreateInfo sessionCreateInfo = {XR_TYPE_SESSION_CREATE_INFO};
 	XR_ERR_RET(SDL_CreateGPUXRSession(context->Device, &sessionCreateInfo, &session), -1);
+
+	context->Window = SDL_CreateWindow(context->ExampleName, 640, 480, SDL_WINDOW_RESIZABLE);
+	if (context->Window == NULL)
+	{
+		SDL_Log("CreateWindow failed: %s", SDL_GetError());
+		return -1;
+	}
+
+	if (!SDL_ClaimWindowForGPUDevice(context->Device, context->Window))
+	{
+		SDL_Log("GPUClaimWindow failed");
+		return -1;
+	}
 
 	return 0;
 }
@@ -61,63 +67,73 @@ static int HandleStateChangedEvent(Context* context, XrEventDataSessionStateChan
 				systemId, 
 				XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 
 				0, 
-				&num_view_configurations, 
+				&viewCount, 
 				NULL), -1);
 
-			XrViewConfigurationView *view_configuration_views = SDL_stack_alloc(XrViewConfigurationView, num_view_configurations);
-			for (Uint32 i = 0; i < num_view_configurations; i++)
-				view_configuration_views[i] = (XrViewConfigurationView){XR_TYPE_VIEW_CONFIGURATION_VIEW};
+			XrViewConfigurationView *view_configuration_views = SDL_stack_alloc(XrViewConfigurationView, viewCount);
+			for (Uint32 i = 0; i < viewCount; i++) view_configuration_views[i] = (XrViewConfigurationView){XR_TYPE_VIEW_CONFIGURATION_VIEW};
 			
 			XR_ERR_RET(xrEnumerateViewConfigurationViews(
 				instance, 
 				systemId, 
 				XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 
-				num_view_configurations, 
-				&num_view_configurations, 
+				viewCount, 
+				&viewCount, 
 				view_configuration_views), -1);
 
-			for(Uint32 i = 0; i < num_view_configurations; i++)
-			{
-				SDL_Log(
-					"%d max width: %d, max height: %d, max sample count: %d, rec width: %d, rec height: %d, rec sample count: %d",
-					i, 
-					view_configuration_views->maxImageRectWidth, 
-					view_configuration_views->maxImageRectHeight, 
-					view_configuration_views->maxSwapchainSampleCount, 
-					view_configuration_views->recommendedImageRectWidth, 
-					view_configuration_views->recommendedImageRectHeight, 
-					view_configuration_views->recommendedSwapchainSampleCount);
+			if(viewCount > 0) {
+				swapchains = SDL_calloc(viewCount, sizeof(Swapchain));
+				views = SDL_calloc(viewCount, sizeof(XrView));
 
-				swapchainSize = (XrExtent2Di){view_configuration_views->recommendedImageRectWidth, view_configuration_views->recommendedImageRectHeight};
+				for(Uint32 i = 0; i < viewCount; i++)
+				{
+					views[i] = (XrView){XR_TYPE_VIEW};
+
+					Swapchain *swapchain = &swapchains[i];
+					SDL_zerop(swapchain);
+
+					XrViewConfigurationView view = view_configuration_views[i];
+
+					SDL_Log(
+						"%d max width: %d, max height: %d, max sample count: %d, rec width: %d, rec height: %d, rec sample count: %d",
+						i, 
+						view.maxImageRectWidth, 
+						view.maxImageRectHeight, 
+						view.maxSwapchainSampleCount, 
+						view.recommendedImageRectWidth, 
+						view.recommendedImageRectHeight, 
+						view.recommendedSwapchainSampleCount);
+
+					XrSwapchainCreateInfo swapchainCreateInfo = {
+						.type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
+						.width = view.recommendedImageRectWidth,
+						.height = view.recommendedImageRectHeight,
+						.mipCount = 1,
+						.sampleCount = 1,
+						.faceCount = 1,
+						.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT, /* sure..? not sure if anything else is needed. */
+						.arraySize = 1};
+
+					swapchain->size = (XrExtent2Di){swapchainCreateInfo.width, swapchainCreateInfo.height};
+
+					XR_ERR_RET(SDL_CreateGPUXRSwapchain(
+						context->Device, 
+						session, 
+						&swapchainCreateInfo, 
+						&swapchain->format, 
+						&swapchain->swapchain, 
+						&swapchain->images), -1);
+				}
 			}
 
 			SDL_stack_free(view_configuration_views);
-
-			XrSwapchainCreateInfo swapchainCreateInfo = {
-				.type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
-				.width = swapchainSize.width,
-				.height = swapchainSize.height,
-				.mipCount = 1,
-				.sampleCount = 1,
-				.faceCount = 1,
-				.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT, /* sure..? not sure if anything else is needed. */
-				.arraySize = 1};
-
-			SDL_GPUTextureFormat swapchainFormat;
-			XR_ERR_RET(SDL_CreateGPUXRSwapchain(
-				context->Device, 
-				session, 
-				&swapchainCreateInfo, 
-				&swapchainFormat, 
-				&swapchain, 
-				&swapchain_textures), -1);
 
 			doXrFrameLoop = true;
 
 			XR_ERR_RET(xrCreateReferenceSpace(session, &(XrReferenceSpaceCreateInfo){
 				.type = XR_TYPE_REFERENCE_SPACE_CREATE_INFO,
 				.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL,
-				.poseInReferenceSpace = {{0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f}},
+				.poseInReferenceSpace = IDENTITY_POSE,
 			}, &localSpace), -1);
 
 			break;
@@ -190,6 +206,20 @@ static int Update(Context* context)
 	return 0;
 }
 
+static int RenderView(SDL_GPUCommandBuffer *cmdbuf, SDL_GPUTexture *texture, XrView view)
+{
+	SDL_GPURenderPass *render_pass = SDL_BeginGPURenderPass(cmdbuf, &(SDL_GPUColorTargetInfo){
+		.texture = texture,
+		.clear_color = {0.5, 1, 0.5, 1},
+		.load_op = SDL_GPU_LOADOP_CLEAR,
+		.store_op = SDL_GPU_STOREOP_STORE,
+	}, 1, NULL);
+
+	SDL_EndGPURenderPass(render_pass);
+
+	return 0;
+}
+
 static int Draw(Context* context)
 {
 	// XrResult result;
@@ -206,10 +236,12 @@ static int Draw(Context* context)
 		XR_ERR_RET(xrBeginFrame(session, &frameBeginInfo), -1);
 
 		// If we need to render, fill out the projection views for each eye
-		XrCompositionLayerProjectionView projectionViews[2];
+		XrCompositionLayerProjectionView projectionViews[viewCount];
+
+		Uint32 viewCountOutput;
 		if(frameState.shouldRender)
 		{
-			// Get a GPU cmd buffer
+			// Get a GPU cmd buffer to render all our frames
 			SDL_GPUCommandBuffer* cmdbuf = SDL_AcquireGPUCommandBuffer(context->Device);
 			if (cmdbuf == NULL)
 			{
@@ -217,48 +249,44 @@ static int Draw(Context* context)
 				return -1;
 			}
 
-			Uint32 viewCount;
-			XrView views[2] = {{XR_TYPE_VIEW}, {XR_TYPE_VIEW}};
 			XrViewState viewState = {XR_TYPE_VIEW_STATE};
-			// TODO: handle viewCount not being 2
 			XR_ERR_RET(xrLocateViews(session, &(XrViewLocateInfo){
 				.type = XR_TYPE_VIEW_LOCATE_INFO,
 				.displayTime = frameState.predictedDisplayTime,
 				.space = localSpace,
 				.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
-			}, &viewState, 2, &viewCount, views), -1);
+			}, &viewState, viewCount, &viewCountOutput, views), -1);
 
-			Uint32 swapchainIndex;
-			XR_ERR_RET(xrAcquireSwapchainImage(swapchain, NULL, &swapchainIndex), -1);
+			for(Uint32 i = 0; i < viewCountOutput; i++) {
+				Swapchain swapchain = swapchains[i];
 
-			XrSwapchainImageWaitInfo waitInfo = {XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
-			waitInfo.timeout = XR_INFINITE_DURATION; /* spec says the runtime *must* never block indefinitely, so this is always safe! but maybe we *should* tune this? not sure */
-			XR_ERR_RET(xrWaitSwapchainImage(swapchain, &waitInfo), -1);
+				Uint32 swapchainIndex;
+				XR_ERR_RET(xrAcquireSwapchainImage(swapchain.swapchain, NULL, &swapchainIndex), -1);
 
-			/* we got the texture we're going to render with! */
-			SDL_GPUTexture *swapchain_texture = swapchain_textures[swapchainIndex];
+				XrSwapchainImageWaitInfo waitInfo = {XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+				waitInfo.timeout = XR_INFINITE_DURATION; /* spec says the runtime *must* never block indefinitely, so this is always safe! but maybe we *should* tune this? not sure */
+				XR_ERR_RET(xrWaitSwapchainImage(swapchain.swapchain, &waitInfo), -1);
 
-			SDL_GPURenderPass *render_pass = SDL_BeginGPURenderPass(cmdbuf, &(SDL_GPUColorTargetInfo){
-				.texture = swapchain_texture,
-				.clear_color = {0.5, 1, 0.5, 1},
-				.load_op = SDL_GPU_LOADOP_CLEAR,
-				.store_op = SDL_GPU_STOREOP_STORE,
-			}, 1, NULL);
+				/* we got the texture we're going to render with! */
+				SDL_GPUTexture *swapchain_texture = swapchain.images[swapchainIndex];
 
-			SDL_EndGPURenderPass(render_pass);
+				if(RenderView(cmdbuf, swapchain_texture, views[i]) != 0) return -1;
+			}
 
 			SDL_SubmitGPUCommandBuffer(cmdbuf);
 
-			XR_ERR_RET(xrReleaseSwapchainImage(swapchain, NULL), -1);
+			for(Uint32 i = 0; i < viewCountOutput; i++) {
+				Swapchain swapchain = swapchains[i];
 
-			for(Uint32 i = 0; i < 2; i++) {
+				XR_ERR_RET(xrReleaseSwapchainImage(swapchains[i].swapchain, NULL), -1);
+
 				projectionViews[i].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW,
 				projectionViews[i].fov = views[i].fov;
 				projectionViews[i].pose = views[i].pose;
 				projectionViews[i].subImage = (XrSwapchainSubImage){
-					.swapchain = swapchain,
+					.swapchain = swapchain.swapchain,
 					.imageArrayIndex = 0,
-					.imageRect = {.offset = {0}, .extent = swapchainSize},
+					.imageRect = {.offset = {0}, .extent = swapchain.size},
 				};
 			}
 		}
@@ -273,7 +301,7 @@ static int Draw(Context* context)
 		projectionLayers[0] = (const XrCompositionLayerBaseHeader*) &(XrCompositionLayerProjection){
 			.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION,
 			.space = localSpace,
-			.viewCount = 2,
+			.viewCount = viewCountOutput,
 			.views = projectionViews,
 		};
 		frameEndInfo.layers = projectionLayers;
@@ -286,8 +314,17 @@ static int Draw(Context* context)
 
 static void Quit(Context* context)
 {
+	if(swapchains) {
+		for(Uint32 i = 0; i < viewCount; i++) {
+			Swapchain swapchain = swapchains[i];
+
+			SDL_DestroyGPUXRSwapchain(context->Device, swapchain.swapchain, swapchain.images);
+		}
+
+		SDL_free(swapchains);
+	}
+	if (views) SDL_free(views);
 	if (localSpace) xrDestroySpace(localSpace);
-	if (swapchain) SDL_DestroyGPUXRSwapchain(context->Device, swapchain, swapchain_textures);
 	if (session) xrDestroySession(session);
 	if (instance) xrDestroyInstance(instance);
 

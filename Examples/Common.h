@@ -2,6 +2,22 @@
 #define SDL_GPU_EXAMPLES_H
 
 #include <SDL3/SDL.h>
+#include <openxr/openxr.h>
+
+#define IDENTITY_QUAT ((XrQuaternionf){0.0, 0.0, 0.0, 1.0})
+#define IDENTITY_POSE ((XrPosef){IDENTITY_QUAT})
+
+#define XR_ERR_RET(resultExpression, retval)                                \
+    do {                                                                    \
+		XrResult resolvedResult = (resultExpression); 						\
+		if (XR_FAILED(resolvedResult)) {                   					\
+			char resultString[XR_MAX_RESULT_STRING_SIZE]; 					\
+			SDL_memset(resultString, 0, SDL_arraysize(resultString)); 		\
+			(void)xrResultToString(instance, resolvedResult, resultString); \
+			SDL_Log("Got OpenXR error %s", resultString);				\
+			return (retval);                      							\
+		} 																	\
+	} while (0)
 
 typedef struct Context
 {
