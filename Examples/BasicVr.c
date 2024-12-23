@@ -1,5 +1,7 @@
 #include "Common.h"
 
+#include <SDL3/SDL_openxr.h>
+
 typedef struct Swapchain {
 	XrSwapchain swapchain;
 	SDL_GPUTexture **images;
